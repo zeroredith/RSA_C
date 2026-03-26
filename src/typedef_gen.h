@@ -16,8 +16,6 @@ typedef struct Flat_Arena Flat_Arena;
 typedef struct Arena Arena;
 typedef struct Allocator Allocator;
 typedef struct Context Context;
-typedef struct RSA_Keys RSA_Keys;
-typedef struct Public_Key Public_Key;
 
 // 
 // ENUM DEFS

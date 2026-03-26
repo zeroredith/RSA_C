@@ -9,6 +9,7 @@
 #include "typedef_gen.h"
 #include "base.c"
 #include "arrays.c"
+#include "chacha20.h"
 
 #define _PRIME_NUMBERS_SIZE 2048
 
@@ -329,8 +330,21 @@ connect_test() {
 }
 
 int
-main(int argc, char *argv[]	) {
-	return connect_test();
+connect_chacha_test(int argc, char *argv[]) {
+	char* try_message = argv[1];
+	u32 key[8];
+	u32 first_nonce[3];
+	chacha20_generate_key(key, first_nonce);
+	ChaCha20_Message encrypted_msg = chacha20_encrypt_msg(try_message, strlen(try_message), key);
+	for(int i= 0; i < encrypted_msg.len; i++) printf("%d", encrypted_msg.data[i]);
+	ChaCha20_Message decrypted_msg = chacha20_decrypt_msg(encrypted_msg, key);
+	printf("\n%.*s", decrypted_msg.len, decrypted_msg.data);
+	return 0;
+}
+
+int
+main(int argc, char *argv[]) {
+	return connect_chacha_test(argc, argv);
 
 	// return command_line(argc, argv);
 }
