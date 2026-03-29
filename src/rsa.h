@@ -208,12 +208,12 @@ sign_mpz(mpz_t result, mpz_t data, RSA_Keys keys) {
 // decrypt public use private keys to decrypt, and vice versa.
 void
 design_data(mpz_t result, mpz_t encrypted, RSA_Keys keys) {
-  mpz_powm(result, encrypted, keys.private, keys.modulus);
+  mpz_powm(result, encrypted, keys.public, keys.modulus);
 }
 
 void
 decrypt_mpz(mpz_t result, mpz_t encrypted, RSA_Keys keys) {
-  mpz_powm(result, encrypted, keys.public, keys.modulus);
+  mpz_powm(result, encrypted, keys.private, keys.modulus);
 }
 
 char*
@@ -288,97 +288,84 @@ command_line(int argc, char* argv[]) {
 	return 0;
 }
 
-typedef struct RSA_Package RSA_Package;
-struct RSA_Package {
-	mpz_t signature;
-	u8* data;
+typedef struct Array_u8 Array_u8;
+struct Array_u8 {
 	u64 count;
+	u8* data;
 };
 
-void
-serialize_rsa_package(RSA_Package package, mpz_t out) {
-	u64 signature_count;
-	u8* signature_bytes = mpz_export(null, &signature_count, 1, sizeof(u8), 0, 0, package.signature);
-	u64 total_size = 8 + signature_count + 8 + package.count; // padding
-	u8* buffer = malloc(total_size);
+typedef struct Data_And_Signature Data_And_Signature;
+struct Data_And_Signature {
+	Array_u8 data;
+	Array_u8 signature;
+};
 
-	u64 offset = 0;
-	memcpy(buffer + offset, &signature_count, 8);
-	offset += 8;
+// NOTE: al serializar no estamos teniendo en cuenta el endianess que se esta utilizando.
+// Es posible que no funcione con distintos endianess.
+Array_u8
+sign_pack_and_encrypt(RSA_Keys keys_alice, RSA_Keys keys_bob, Array_u8 data) {
+	mpz_t signature, encrypted_data_mpz;
 
-	memcpy(buffer + offset, signature_bytes, signature_count);
-	offset += signature_count;
+	mpz_t tmp_d;
+	mpz_init(tmp_d);
 
-	memcpy(buffer + offset, &package.count, 8);
-	offset += 8;
+	mpz_init(signature);
+	mpz_init(encrypted_data_mpz);
 
-	memcpy(buffer + offset, package.data, package.count);
+	sign_data(signature, data.data, data.count, keys_alice);
 
-	mpz_import(out, total_size, 1, 1, 0, 0, buffer);
+	Array_u8 signature_exported = {0};
+	Array_u8 packed = {0};
+	Array_u8 encrypted_data = {0};
 
-	free(signature_bytes);
-	free(buffer);
+	signature_exported.data = mpz_export(null, &signature_exported.count, 1, sizeof(u8), 0, 0, signature);
+
+
+	encrypt_data(encrypted_data_mpz, data.data, data.count, keys_bob);
+	encrypted_data.data = mpz_export(null, &encrypted_data.count, 1, sizeof(u8), 0, 0, encrypted_data_mpz);
+
+	packed.count = 16 + encrypted_data.count + signature_exported.count;
+	packed.data = malloc(packed.count);
+
+	memcpy(packed.data, &signature_exported.count, 8);
+	memcpy(packed.data + 8, &encrypted_data.count, 8);
+	memcpy(packed.data + 16, signature_exported.data, signature_exported.count);
+	memcpy(packed.data + 16 + signature_exported.count, encrypted_data.data, encrypted_data.count);
+
+	return packed;
 }
 
-RSA_Package
-deserialize_rsa_package(mpz_t serialized) {
-	RSA_Package package;
-	u64 size;
-	u8* buffer = mpz_export(null, &size, 1, sizeof(u8), 0, 0, serialized);
 
-	u64 offset = 0;
 
-	u64 signature_size;
-	memcpy(&signature_size, buffer + offset, 8);
-	offset += 8;
+Data_And_Signature
+unpack_decrypt_and_check_signature(RSA_Keys keys_alice, RSA_Keys keys_bob, u8* encrypted_data, u64 encrypted_count) {
+	mpz_t decrypted_mpz;
+	mpz_t encrypted_mpz;
+	mpz_t sign_mpz;
+	mpz_t designed_mpz;
+	mpz_init(decrypted_mpz);
+	mpz_init(designed_mpz);
+	mpz_init(encrypted_mpz);
+	mpz_init(sign_mpz);
 
-	u8* signature_bytes = buffer+offset;
-	offset += signature_bytes;
+	mpz_import(encrypted_mpz, *(u64*)(encrypted_data+8), 1, sizeof(u8), 0, 0, encrypted_data + 16 + *(u64*)encrypted_data);
+	decrypt_mpz(decrypted_mpz, encrypted_mpz, keys_bob);
 
-	u64 data_size;
-	memcpy(&data_size, buffer + offset, 8);
-	offset += 8;
+	Array_u8 decrypted = {0};
+	decrypted.data = mpz_export(null, &decrypted.count, 1, sizeof(u8), 0, 0, decrypted_mpz);
+	printf("decrypted[%.*s] count = %d\n", decrypted.count, decrypted.data, decrypted.count);
 
-	u8* data = malloc(data_size);
-	memcpy(data, buffer + offset, data_size);
-
-	mpz_init(package.signature);
-	mpz_import(package.signature, signature_size, 0, sizeof(u8), 0, 0, signature_bytes);
-
-	package.data = data;
-	package.count = data_size;
-
-	return package;
-}
-
-void
-encrypt_and_pack(RSA_Keys keys_alice, RSA_Keys keys_bob, u8* data, u64 count, mpz_t out) {
-	RSA_Package package;
-	mpz_t serialized;
-	mpz_init(package.signature);
-	mpz_init(serialized);
-
-	package.data = data;
-	package.count = count;
-	sign_data(package.signature, data, count, keys_alice);
-	serialize_rsa_package(package, serialized);
-	encrypt_mpz(out, serialized, keys_bob);
-  mpz_clear(serialized);
-  mpz_clear(package.signature);
-}
-
-void
-unpack_decrypt_and_check_signature(RSA_Keys keys_alice, RSA_Keys keys_bob, mpz_t encrypted) {
-	mpz_t serialized;
-	mpz_init(serialized);
-	decrypt_mpz(serialized, encrypted, keys_bob);
-	RSA_Package package = deserialize_rsa_package(serialized);
-	printf("\npackage.data = %.*s\n", package.count, package.data);
+	mpz_import(designed_mpz, *(u64*)encrypted_data, 1, sizeof(u8), 0, 0, encrypted_data+16);
+	design_data(designed_mpz, designed_mpz, keys_alice);
+	Array_u8 designed = {0};
+	designed.data = mpz_export(null, &designed.count, 1, sizeof(u8), 0, 0, designed_mpz);
+	printf("designed[%.*s]\n", designed.count, designed.data);
+	return (Data_And_Signature){.data = decrypted, .signature = designed};
 }
 
 int
 encrypt_decrypt_rsa_test(char *argv[]) {
-	printf("======== encrypt_decrypt_rsa_test ========\n");
+	printf("\n======== encrypt_decrypt_rsa_test ========\n");
 	RSA_Keys keys_alice;
 	RSA_Keys keys_bob;
 
@@ -388,18 +375,21 @@ encrypt_decrypt_rsa_test(char *argv[]) {
 	init_rsa_keys(&keys_bob);
 	get_rsa_keys(&keys_bob);
 
-	char* try_string = "asdf";
-	mpz_t packed;
-	mpz_init(packed);
+	char* try_string = argv[1];
 
-	encrypt_and_pack(keys_alice, keys_bob, try_string, strlen(try_string), packed);
-	unpack_decrypt_and_check_signature(keys_alice, keys_bob, packed);
+	u8* packed_and_encrypted_data;
+	u64 packed_and_encrypted_count;
 
+	Array_u8 try_string_u8 = {.data = try_string, .count = strlen(try_string)};
+	Array_u8 encrypted = sign_pack_and_encrypt(keys_alice, keys_bob, try_string_u8);
 
-	// if(strncmp(result_str, try_string, count) != 0) printf("\n ERROR count encrypt_decrypt_rsa_test \n ");
-	// if(strncmp(result_str, try_string, strlen(try_string)) != 0) printf("\n ERROR len encrypt_decrypt_rsa_test \n ");
+	// sending ...
 
+	Data_And_Signature data_and_signature = unpack_decrypt_and_check_signature(keys_alice, keys_bob, encrypted.data, encrypted.count);
 	fflush(stdout);
+	if (data_and_signature.data.count != data_and_signature.signature.count) return 0;
+	else if (memcmp(data_and_signature.data.data, data_and_signature.signature.data, data_and_signature.data.count) == 0) return 1;
+	else return 0;
 }
 
 int
@@ -467,54 +457,55 @@ connect_chacha_with_rsa_test(int argc, char *argv[]) {
 	memcpy(chacha_key_and_nonce, chacha_key, sizeof(u32) * 8);
 	memcpy(chacha_key_and_nonce + 8, first_nonce, sizeof(u32) * 3);
 
+	Array_u8 chacha_key_and_nonce_array = {.data = (u8*)chacha_key_and_nonce, .count = sizeof(u32) * 11};
 
-	sign_data(result, (u8*)chacha_key_and_nonce, sizeof(u32) * 11, keys_rsa_alice);
-	encrypt_mpz(result, result, keys_rsa_bob);
+	Array_u8 encrypted_key = sign_pack_and_encrypt(keys_rsa_alice, keys_rsa_bob, chacha_key_and_nonce_array);
 
-	// sending chacha keys by rsa it ...
+	// sending ...
 
-	design_data(result, result, keys_rsa_bob);
-	decrypt_mpz(result, result, keys_rsa_alice);
+	Data_And_Signature decrypted_key = unpack_decrypt_and_check_signature(keys_rsa_bob, keys_rsa_alice, encrypted_key.data, encrypted_key.count);
 
-	u64 out_count = 0;
-	// gmp_printf("Decrypted chacha %s\n", mpz_to_string(result, &out_count));
+	if (decrypted_key.data.count != decrypted_key.signature.count) return 0; // TODO: Cambiar para que use un log personalizado.
 
-	// using chacha keys to send the message.
-	u32 received_chacha_key_and_nonce[11] = {0};
-	u64 count = 0;
-	u8* raw_received;
+	u32 chacha_key_and_nonce_received[11];
+	for (int i = 0; i < 11; i++) chacha_key_and_nonce_received[i] = ((u32*)decrypted_key.data.data)[i];
 
-	mpz_export(raw_received, &count, 1, sizeof(u8), 0, 0, result);
-
-	// assert(count <= 44);
-	// // the last 44 bytes are the chacha_key and the nonce. They are saved in little endian
-	// TODO: 44 is hardcoded as the size of chacha keys and count is not being used,
-	// for some reason count sometimes is greater than 44 and some trash is located before (little endian)
-	// I should debug it but for now it should not be a problem.
-	memcpy(received_chacha_key_and_nonce, raw_received, 44);
+	chacha20_encrypt_msg();
 
 
-	ChaCha20_Message encrypted_msg = chacha20_encrypt_msg(try_message, strlen(try_message), received_chacha_key_and_nonce);
-	ChaCha20_Message decrypted_msg = chacha20_decrypt_msg(encrypted_msg, received_chacha_key_and_nonce);
+	// // assert(count <= 44);
+	// // // the last 44 bytes are the chacha_key and the nonce. They are saved in little endian
+	// // TODO: 44 is hardcoded as the size of chacha keys and count is not being used,
+	// // for some reason count sometimes is greater than 44 and some trash is located before (little endian)
+	// // I should debug it but for now it should not be a problem.
+	// memcpy(received_chacha_key_and_nonce, raw_received, 44);
 
-	printf("\n%.*s \n", decrypted_msg.len, decrypted_msg.data);
-	printf("==================================\n");
-	assert(strncmp(try_message, decrypted_msg.data, decrypted_msg.len) == 0);
 
-	fflush(stdout);
-	free(encrypted_msg.data);
-	free(decrypted_msg.data);
-	mpz_clear(result);
-	clear_rsa_keys(&keys_rsa_alice);
-	clear_rsa_keys(&keys_rsa_bob);
+	// ChaCha20_Message encrypted_msg = chacha20_encrypt_msg(try_message, strlen(try_message), received_chacha_key_and_nonce);
+	// ChaCha20_Message decrypted_msg = chacha20_decrypt_msg(encrypted_msg, received_chacha_key_and_nonce);
+
+	// printf("\n%.*s \n", decrypted_msg.len, decrypted_msg.data);
+	// printf("==================================\n");
+	// assert(strncmp(try_message, decrypted_msg.data, decrypted_msg.len) == 0);
+
+	// fflush(stdout);
+	// free(encrypted_msg.data);
+	// free(decrypted_msg.data);
+	// mpz_clear(result);
+	// clear_rsa_keys(&keys_rsa_alice);
+	// clear_rsa_keys(&keys_rsa_bob);
 	return 0;
 }
 
 int
 main(int argc, char *argv[]) {
-	for (int i = 0; i < 10; i++) {
+	assert(argv[1] != null);
+	for (int i = 0; i < 2; i++) {
 		// connect_test(argc, argv);
-		encrypt_decrypt_rsa_test(argv);
+		int result = encrypt_decrypt_rsa_test(argv);
+		if (result == 1) printf("\nTEST PASSED\n");
+		if (result == 0) printf("\nTEST FAILED\n");
+		result = connect_chacha_with_rsa_test(argc, argv);
 		// command_line(argc, argv);
 		// connect_chacha_with_rsa_test(argc, argv);
 	}
