@@ -48,8 +48,8 @@ chacha20_block(u32 state[16], u8 output[64]) {
 
 #define chacha20_decrypt_alloc chacha20_encrypt_alloc
 u8*
-chacha20_encrypt_alloc(u8* input, u64 len, u32 key[8], u32 nonce[3]) {
-	u8* output = malloc(len); // TODO: change it to be able to use your own allocator
+chacha20_encrypt_alloc(u8* input, u64 count, u32 key[8], u32 nonce[3]) {
+	u8* output = malloc(count); // TODO: change it to be able to use your own allocator
 	// constant of 4 words of 32 bytes [expa|nd 3|2-by|te k] used in standard chacha20
 	u32 state[16] = {
 		0x61707865, 0x3320646e, 0x79622d32, 0x6b206574,
@@ -60,10 +60,10 @@ chacha20_encrypt_alloc(u8* input, u64 len, u32 key[8], u32 nonce[3]) {
 
 	u8 keystream[64];
 	u64 i = 0;
-	while (i < len) {
+	while (i < count) {
 		chacha20_block(state, keystream);
 		state[12]++;
-		u64 block_len = (len - i) < 64 ? (len - i) : 64;
+		u64 block_len = (count - i) < 64 ? (count - i) : 64;
 		for (u64 j = 0; j < block_len; j++)
 		output[i + j] = input[i + j] ^ keystream[j];
 		i += block_len;
@@ -85,13 +85,13 @@ chacha20_generate_key(u32 key[8], u32 nonce[3]) {
 typedef struct ChaCha20_Message ChaCha20_Message;
 struct ChaCha20_Message {
 	u32 nonce[3];
-	u64 len;
+	u64 count;
 	u8* data;
 };
 
 
 ChaCha20_Message
-chacha20_encrypt_msg(u8* input, u64 len, u32 key[8]) {
+chacha20_encrypt_msg(u8* input, u64 count, u32 key[8]) {
 	ChaCha20_Message msg;
 	u32 nonce[3];
 	for (int i = 0; i < 3; i++) nonce[i] = ((u32)rand() << 16) ^ rand();
@@ -99,16 +99,16 @@ chacha20_encrypt_msg(u8* input, u64 len, u32 key[8]) {
 	msg.nonce[0] = nonce[0];
 	msg.nonce[1] = nonce[1];
 	msg.nonce[2] = nonce[2];
-	msg.len  = len;
-	msg.data = chacha20_encrypt_alloc(input, len, key, nonce);
+	msg.count  = count;
+	msg.data = chacha20_encrypt_alloc(input, count, key, nonce);
 	return msg;
 }
 
 ChaCha20_Message
 chacha20_decrypt_msg(ChaCha20_Message msg, u32 key[8]) {
 	ChaCha20_Message out;
-	out.len  = msg.len;
-	out.data = chacha20_decrypt_alloc(msg.data, msg.len, key, msg.nonce);
+	out.count  = msg.count;
+	out.data = chacha20_decrypt_alloc(msg.data, msg.count, key, msg.nonce);
 	return out;
 }
 
@@ -125,10 +125,10 @@ connect_chacha_test(int argc, char *argv[]) {
 	chacha20_generate_key(key, first_nonce);
 
 	ChaCha20_Message encrypted_msg = chacha20_encrypt_msg(try_message, strlen(try_message), key);
-	for(int i= 0; i < encrypted_msg.len; i++) printf("%d", encrypted_msg.data[i]);
+	for(int i= 0; i < encrypted_msg.count; i++) printf("%d", encrypted_msg.data[i]);
 
 	ChaCha20_Message decrypted_msg = chacha20_decrypt_msg(encrypted_msg, key);
-	printf("\n%.*s", decrypted_msg.len, decrypted_msg.data);
+	printf("\n%.*s", decrypted_msg.count, decrypted_msg.data);
 	return 0;
 }
 
