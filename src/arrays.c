@@ -8,11 +8,18 @@
 #include "base.c"
 #include <sys/stat.h>
 
+// this are non-generated arrays that are needed in arrays.c or in my autogen tools. Look at :non-generated
 typedef struct Array_String Array_String;
 struct Array_String {
 	u64 count;
 	u64 capacity;
 	String *data;
+};
+typedef struct Array_char Array_char;
+struct Array_char {
+	u64 count;
+	u64 capacity;
+	char *data;
 };
 
 // @TODO cambiar esto por el allocator del context.
@@ -28,7 +35,7 @@ array_may_grow(array);                  \
 (array).data[(array).count++] = item; \
 } while(0)                              \
 
-#define array_pop(array) do { if(array.count > 0) array.count--; } while(0)
+#define array_pop(array) do { if(array.count > 0) array.data[array.count--]; } while(0)
 
 #endif
 
@@ -93,6 +100,7 @@ main(int argc, char** argv) {
 	if (argc < 2) return 0;
 	Array_String declarations = {0};
 	Array_String built_structs = {0};
+	String source_path = string(argv[0]);
 	for(int i = 1; i < argc; i++) {
 		String path = string_from_cstring(argv[i]);
 		String file_string = read_entire_file(path);
@@ -107,7 +115,9 @@ main(int argc, char** argv) {
 			if(lexer.token != CLEX_id) continue;
 			String lexer_string = to_string(lexer.string);
 
+			// :non-generated
 			if (string_scmp(lexer_string, string("Array_String"), 12)) continue;
+			if (string_scmp(lexer_string, string("Array_char"), 10)) continue;
 
 	  	if (starts_with(lexer_string, string("Array_"))) {
 		  	bool exists = false;
@@ -125,7 +135,7 @@ main(int argc, char** argv) {
 		for(int i = 0; i < declarations.count; i++)	add_type(&declarations, declarations.data[i]);
 	}
 
-	String this_file_string = read_entire_file(string("arrays.c"));
+	String this_file_string = read_entire_file(source_path);
 	s64 index = string_contains(this_file_string, string(generated_text));
 
 	String_Builder this_file_sb = string_to_sb(this_file_string);
@@ -147,21 +157,34 @@ main(int argc, char** argv) {
 	}
 	sb_append_at(&this_file_sb, string("#endif"), this_file_sb.count-1);
 
-	string_to_file(string("arrays.c"), sb_to_string(this_file_sb));
+	string_to_file(source_path, sb_to_string(this_file_sb));
 	return 0;
 }
 #endif
-#ifndef ARRAYS_C_END
+
+#if !defined(ARRAYS_C_END) && !defined(MAIN)
 #define ARRAYS_C_END
 
 
 //:Generated
-typedef struct Array_char Array_char;
+typedef struct Array_u8 Array_u8;
+typedef struct Array_Thread Array_Thread;
+typedef struct Array_Task Array_Task;
 typedef struct Array_u64 Array_u64;
-struct Array_char {
+struct Array_u8 {
 	u64 count;
 	u64 capacity;
-	char *data;
+	u8 *data;
+};
+struct Array_Thread {
+	u64 count;
+	u64 capacity;
+	Thread *data;
+};
+struct Array_Task {
+	u64 count;
+	u64 capacity;
+	Task *data;
 };
 struct Array_u64 {
 	u64 count;

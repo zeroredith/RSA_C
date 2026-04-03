@@ -1,6 +1,9 @@
+// @TODO: if it finds the string "function" and its not in a function declaration it crashes.
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#define ARRAYS_C_END
 #include "arrays.c"
 
 typedef struct String String;
@@ -133,7 +136,7 @@ parse_file(char* file_name) {
     if (strncmp(lexer.where_firstchar, "enum", 4) == 0)   in_enum_def = true;
     if (strncmp(lexer.where_firstchar, "struct", 6) == 0) {
     	char* c = lexer.where_firstchar + 6;
-    	int i;
+    	int i = 0;
     	while(c[i] != '\n') i++;
     	while (isspace(c[i])) {
     		i++;
@@ -149,11 +152,10 @@ parse_file(char* file_name) {
 }
 
 
-int main() {
+int main(int argc, char* argv[]) {
+	for(int i = 1; i < argc; i++) parse_file(argv[i]);
 
-  parse_file("./src/base.c");
-  parse_file("./src/main.c");
-  FILE* new_f = fopen("./src/typedef_gen.h", "wb");
+  FILE* new_f = fopen("src/typedef_gen.h", "wb");
 
   write_string(new_f, string("#ifndef TYPEDEF_GEN_H\n#define TYPEDEF_GEN_H\n"));
   write_string(new_f, string("\n#define function\n"));
