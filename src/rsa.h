@@ -1,17 +1,39 @@
 #include <stdio.h>
 #include <gmp.h>
 #include <time.h>
-#include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <pthread.h>
 #include <unistd.h>
+
+
+#ifdef RSA_H_IMPLEMENTATION
+
+typedef uint8_t u8;
+typedef int8_t s8;
+typedef uint16_t u16;
+typedef int16_t s16;
+typedef int32_t s32;
+typedef uint32_t u32;
+typedef uint64_t u64;
+typedef int64_t s64;
+typedef float f32;
+typedef double f64;
+
+#define internal static
+#define global static
+#define null NULL
+
+#else
 
 #include "types.h"
 #include "typedef_gen.h"
 #include "base.c"
 #include "arrays.c"
 #include "chacha20.h"
+
+#endif
+
 
 #define _PRIME_NUMBERS_SIZE 2048
 
@@ -35,7 +57,7 @@ mpz_rand_num(mpz_t prime, u32 bits) {
 	mpz_init(rand_num);
 	gmp_randinit_default(state);
 
-	u64 seed = (u64)time(null) ^ (u64)clock();
+	u64 seed = (u64)time(null) ^ (u64)clock() ^ (u64)pthread_self(); // used for thread independece security
 	gmp_randseed_ui(state, seed);
 
 	mpz_urandomb(rand_num, state, bits);
@@ -51,7 +73,7 @@ carmichael(mpz_t result, mpz_t prime1, mpz_t prime2) {
 	/*
     Since n = pq
     Carmichael_funciton(n) = lem(Carmichael_funciton(prime1), Carmichael_funciton(prime2))
-    p & q are prime so lem(p-1,q-1)
+    p & q are primes so lem(p-1,q-1)
   */
 	mpz_t prime1_minus_one, prime2_minus_one, gcd;
 	mpz_inits(prime1_minus_one, prime2_minus_one, gcd, null);
@@ -68,57 +90,48 @@ carmichael(mpz_t result, mpz_t prime1, mpz_t prime2) {
 }
 
 internal inline void
-generate_keys(mpz_t keys[3]) {
-	mpz_t prime1, prime2, modulus, carmichael_result, public, public_check, private;
-
-	mpz_inits(prime1, prime2, modulus, carmichael_result, public, public_check, private, null);
-
-	mpz_init_set_ui(public, 65537);
-
-	mpz_rand_num(prime1, _PRIME_NUMBERS_SIZE);
-	mpz_rand_num(prime2, _PRIME_NUMBERS_SIZE);
-
-	mpz_mul(modulus, prime1, prime2);
-
-	carmichael(carmichael_result, prime1, prime2);
-
-	mpz_gcd(public_check, carmichael_result, public);
-	while(mpz_cmp_ui(public_check, 1)!=0) {
-		mpz_gcd(public_check, carmichael_result, public);
-		mpz_nextprime(public, public);
-	}
-
-	mpz_invert(private, public, carmichael_result);
-
-	mpz_init_set(keys[0], modulus);
-	mpz_init_set(keys[1], public);
-	mpz_init_set(keys[2], private);
-
-	mpz_clears(prime1, prime2, private, modulus, carmichael_result, public, public_check, null);
-}
-
-
-internal inline void
 init_rsa_keys(RSA_Keys *keys) {
 	mpz_inits(keys->modulus, keys->public, keys->private, keys->prime1, keys->prime2, keys->d_prime1, keys->d_prime2, keys->garner, null);
 }
 
+typedef struct Prime_Gen_Args Prime_Gen_Args;
+struct Prime_Gen_Args {
+	mpz_t result;
+	u64 bits;
+};
+
+void*
+prime_gen_thread(void* arg) {
+	Prime_Gen_Args* args = arg;
+	mpz_rand_num(args->result, args->bits);
+	return null;
+}
+
 RSA_Keys
-rsa_generate_keys() {
+rsa_generate_keys(void) {
 	RSA_Keys keys;
-	mpz_t prime1, prime2, carmichael_result, public_check;
-	mpz_inits(prime1, prime2, carmichael_result, public_check, null);
+	mpz_t carmichael_result, public_check, prime1, prime2;
+	mpz_inits(carmichael_result, public_check, prime1, prime2, null);
 	init_rsa_keys(&keys);
 	mpz_init_set_ui(keys.public, 65537);
 
-	mpz_rand_num(prime1, _PRIME_NUMBERS_SIZE);
-	mpz_rand_num(prime2, _PRIME_NUMBERS_SIZE);
+	Prime_Gen_Args args1, args2;
+	mpz_init(args1.result);
+	mpz_init(args2.result);
+	args1.bits = _PRIME_NUMBERS_SIZE; // @TODO: Cambiar para que sea por parametro.
+	args2.bits = _PRIME_NUMBERS_SIZE;
 
-	mpz_set(keys.prime1, prime1);
-	mpz_set(keys.prime2, prime2);
+	pthread_t t1, t2;
+	pthread_create(&t1, null, prime_gen_thread, &args1);
+	pthread_create(&t2, null, prime_gen_thread, &args2);
+	pthread_join(t1, null);
+	pthread_join(t2, null);
 
-	mpz_mul(keys.modulus, prime1, prime2);
-	carmichael(carmichael_result, prime1, prime2);
+	mpz_set(keys.prime1, args1.result);
+	mpz_set(keys.prime2, args2.result);
+
+	mpz_mul(keys.modulus, keys.prime1, keys.prime2);
+	carmichael(carmichael_result, keys.prime1, keys.prime2);
 
 	mpz_gcd(public_check, carmichael_result, keys.public);
 	while(mpz_cmp_ui(public_check, 1) != 0) {
@@ -128,34 +141,16 @@ rsa_generate_keys() {
 
 	mpz_invert(keys.private, keys.public, carmichael_result);
 
-	// Importante usar prime1 y prime2 despues de haber calculado modulus y carmichael.
-	mpz_sub_ui(prime1, prime1, 1);
-	mpz_sub_ui(prime2, prime2, 1);
+	// Importante usar keys.prime1 y keys.prime2 despues de haber calculado modulus y carmichael.
+	mpz_sub_ui(prime1, keys.prime1, 1);
+	mpz_sub_ui(prime2, keys.prime2, 1);
 	mpz_mod(keys.d_prime1, keys.private, prime1);
 	mpz_mod(keys.d_prime2, keys.private, prime2);
 	mpz_invert(keys.garner, keys.prime2, keys.prime1);
 
-	mpz_clears(prime1, prime2, carmichael_result, public_check, null);
+	mpz_clears(carmichael_result, prime1, prime2, public_check, args1.result, args2.result, null);
 	return keys;
 }
-
-// @TODO: este wrapper no deberia de ser necesario.
-internal inline void
-get_rsa_keys(RSA_Keys *keys) {
-	mpz_t temp_keys[3];
-	mpz_inits(temp_keys[0], temp_keys[1], temp_keys[2], null);
-
-	generate_keys(temp_keys);
-
-	mpz_set(keys->modulus, temp_keys[0]);
-	mpz_set(keys->public, temp_keys[1]);
-	mpz_set(keys->private, temp_keys[2]);
-
-	mpz_clear(temp_keys[0]);
-	mpz_clear(temp_keys[1]);
-	mpz_clear(temp_keys[2]);
-}
-
 
 internal inline void
 clear_rsa_keys(RSA_Keys *keys) {
@@ -201,6 +196,35 @@ decrypt_mpz(mpz_t result, mpz_t encrypted, RSA_Keys keys) {
   mpz_powm(result, encrypted, keys.private, keys.modulus);
 }
 
+void
+decrypt_crt(mpz_t result, mpz_t encrypted, RSA_Keys keys) {
+	mpz_t m1, m2, h;
+	mpz_inits(m1, m2, h, null);
+
+	mpz_powm(m1, encrypted, keys.d_prime1, keys.prime1);
+	mpz_powm(m2, encrypted, keys.d_prime2, keys.prime2);
+
+	mpz_sub(h, m1, m2);
+
+	if (mpz_sgn(h) < 0) mpz_add(h, h, keys.prime1);
+	mpz_mul(h, keys.garner, h);
+	mpz_mod(h, h, keys.prime1);
+
+	mpz_mul(result, h, keys.prime2);
+	mpz_add(result, result, m2);
+
+	mpz_clears(m1, m2, h, null);
+}
+
+void
+sign_crt(mpz_t result, u8* data, u64 len, RSA_Keys keys) {
+	mpz_t m;
+	mpz_init(m);
+	mpz_import(m, len, 1, sizeof(u8), 0, 0, data);
+	decrypt_crt(result, m, keys);
+	mpz_clear(m);
+}
+
 char*
 mpz_to_string(mpz_t data, u64* out_count) {
   u64 count = 0;
@@ -231,7 +255,7 @@ sign_and_encrypt(RSA_Keys keys_alice, RSA_Keys keys_bob, Array_u8 data) {
 	mpz_t signature, encrypted_data_mpz, tmp_d;
 	mpz_inits(tmp_d, signature, encrypted_data_mpz, null);
 
-	sign_data(signature, data.data, data.count, keys_alice);
+	sign_crt(signature, data.data, data.count, keys_alice);
 
 	Array_u8 signature_exported = {0};
 	Array_u8 packed = {0};
@@ -260,7 +284,7 @@ decrypt(RSA_Keys keys_alice, RSA_Keys keys_bob, u8* encrypted_data, u64 encrypte
 	mpz_inits(decrypted_mpz, encrypted_mpz, sign_mpz, designed_mpz, null);
 
 	mpz_import(encrypted_mpz, *(u64*)(encrypted_data+8), 1, sizeof(u8), 0, 0, encrypted_data + 16 + *(u64*)encrypted_data);
-	decrypt_mpz(decrypted_mpz, encrypted_mpz, keys_bob);
+	decrypt_crt(decrypted_mpz, encrypted_mpz, keys_bob);
 
 	Array_u8 decrypted = {0};
 	decrypted.data = mpz_export(null, &decrypted.count, 1, sizeof(u8), 0, 0, decrypted_mpz);
@@ -271,6 +295,7 @@ decrypt(RSA_Keys keys_alice, RSA_Keys keys_bob, u8* encrypted_data, u64 encrypte
 	designed.data = mpz_export(null, &designed.count, 1, sizeof(u8), 0, 0, designed_mpz);
 	return (Data_And_Signature){.data = decrypted, .signature = designed};
 }
+
 
 // :tests
 #ifndef RSA_H_IMPLEMENTATION
@@ -284,9 +309,9 @@ _rsa_log(char* text) {
 	buffer_logs[buffer_logs_count] = new_string;
 	buffer_logs_count += 1;
 }
-
+// @TODO: Cambiar como funciona este sistema de logs
 void
-_print_logs() {
+_print_logs(void) {
 	for (int i = 0; i < buffer_logs_count; i++) {
 		printf("\nLOG:[%s]\n", buffer_logs[i]);
 	}
@@ -297,14 +322,8 @@ _print_logs() {
 
 bool
 encrypt_decrypt_rsa_test(char *arg) {
-	RSA_Keys keys_alice;
-	RSA_Keys keys_bob;
-
-	init_rsa_keys(&keys_alice);
-	get_rsa_keys(&keys_alice);
-
-	init_rsa_keys(&keys_bob);
-	get_rsa_keys(&keys_bob);
+	RSA_Keys keys_alice = rsa_generate_keys();
+	RSA_Keys keys_bob = rsa_generate_keys();
 
 	u8* packed_and_encrypted_data;
 	u64 packed_and_encrypted_count;
@@ -325,14 +344,9 @@ encrypt_decrypt_rsa_test(char *arg) {
 bool
 connect_chacha_with_rsa_test(char* arg) {
 	// printf("====== connect_chacha_with_rsa_test ====== \n");
-	RSA_Keys keys_rsa_alice;
-	RSA_Keys keys_rsa_bob;
+	RSA_Keys keys_rsa_alice = rsa_generate_keys();
+	RSA_Keys keys_rsa_bob = rsa_generate_keys();
 
-	init_rsa_keys(&keys_rsa_alice);
-	get_rsa_keys(&keys_rsa_alice);
-
-	init_rsa_keys(&keys_rsa_bob);
-	get_rsa_keys(&keys_rsa_bob);
 
 	mpz_t result;
 	mpz_init(result);
@@ -451,18 +465,54 @@ pool_join(void) {
 	for (int i = 0; i < MAX_THREADS; i++) pthread_join(thread_pool.data[i].thread_id, null);
 }
 
+
+// AI_GENERATED benchmark
+bool
+benchmark_crt_vs_naive(char* arg) {
+	clock_t t0, t1;
+	t0 = clock();
+	RSA_Keys keys = rsa_generate_keys();
+	t1 = clock();
+	printf("keygen: %.1f ms\n", (double)(t1 - t0) / CLOCKS_PER_SEC * 1000.0);
+
+	mpz_t encrypted, result;
+	mpz_inits(encrypted, result, null);
+
+	// cifrar algo para tener input
+	u64 len = strlen(arg);
+	encrypt_data(encrypted, (u8*)arg, len, keys);
+
+	int n = 20;
+
+	t0 = clock();
+	for (int i = 0; i < n; i++) decrypt_mpz(result, encrypted, keys);
+	t1 = clock();
+	double naive_ms = (double)(t1 - t0) / CLOCKS_PER_SEC * 1000.0;
+
+	t0 = clock();
+	for (int i = 0; i < n; i++) decrypt_crt(result, encrypted, keys);
+	t1 = clock();
+	double crt_ms = (double)(t1 - t0) / CLOCKS_PER_SEC * 1000.0;
+
+	printf("naive: %.1f ms  crt: %.1f ms  speedup: %.2fx\n",
+		naive_ms / n, crt_ms / n, naive_ms / crt_ms);
+
+	mpz_clears(encrypted, result, null);
+	return crt_ms < naive_ms;
+}
+
 int
 main(void) {
 	char* arg = "abracadabra";
-
+	// benchmark_crt_vs_naive(arg);
 	for(int i = 0; i < MAX_THREADS; i++) {
 		array_add(free_threads, i);
 		array_add(thread_pool, (Thread){0});
 	}
 
 	for (int i = 0; i < 5; i++) {
-    pool_test_run(encrypt_decrypt_rsa_test, arg, "encrypt_decrypt_rsa_test");
-    pool_test_run(connect_chacha_with_rsa_test, arg, "connect_chacha_with_rsa_test");
+	  pool_test_run(encrypt_decrypt_rsa_test, arg, "encrypt_decrypt_rsa_test");
+	  pool_test_run(connect_chacha_with_rsa_test, arg, "connect_chacha_with_rsa_test");
 	}
 	pool_join();
 }
