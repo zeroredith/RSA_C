@@ -1,3 +1,6 @@
+#ifndef RRM_RSA_H
+#define RRM_RSA_H
+
 #include <stdio.h>
 #include <gmp.h>
 #include <time.h>
@@ -7,7 +10,16 @@
 #include <unistd.h>
 
 
-#ifdef RSA_H_IMPLEMENTATION
+
+#ifdef RSA_TESTS
+
+#include "types.h"
+#include "typedef_gen.h"
+#include "base.c"
+#include "arrays.c"
+#include "chacha20.h"
+
+#else
 
 typedef uint8_t u8;
 typedef int8_t s8;
@@ -23,14 +35,6 @@ typedef double f64;
 #define internal static
 #define global static
 #define null NULL
-
-#else
-
-#include "types.h"
-#include "typedef_gen.h"
-#include "base.c"
-#include "arrays.c"
-#include "chacha20.h"
 
 #endif
 
@@ -48,6 +52,26 @@ typedef struct RSA_Keys {
 	mpz_t d_prime2; // d mod (q-1)
 	mpz_t garner;
 } RSA_Keys;
+
+typedef struct Prime_Gen_Args Prime_Gen_Args;
+struct Prime_Gen_Args {
+	mpz_t result;
+	u64 bits;
+};
+
+typedef struct _Array_u8 _Array_u8;
+struct _Array_u8 {
+	u64 count;
+	u8* data;
+};
+
+typedef struct Data_And_Signature Data_And_Signature;
+struct Data_And_Signature {
+	_Array_u8 data;
+	_Array_u8 signature;
+};
+
+#ifdef RSA_IMPLEMENTATION
 
 internal inline void
 mpz_rand_num(mpz_t prime, u32 bits) {
@@ -94,11 +118,7 @@ init_rsa_keys(RSA_Keys *keys) {
 	mpz_inits(keys->modulus, keys->public, keys->private, keys->prime1, keys->prime2, keys->d_prime1, keys->d_prime2, keys->garner, null);
 }
 
-typedef struct Prime_Gen_Args Prime_Gen_Args;
-struct Prime_Gen_Args {
-	mpz_t result;
-	u64 bits;
-};
+
 
 void*
 prime_gen_thread(void* arg) {
@@ -234,32 +254,20 @@ mpz_to_string(mpz_t data, u64* out_count) {
   return bytes;
 }
 
-#ifdef RSA_H_IMPLEMENTATION
-typedef struct Array_u8 Array_u8;
-struct Array_u8 {
-	u64 count;
-	u8* data;
-};
-#endif
 
-typedef struct Data_And_Signature Data_And_Signature;
-struct Data_And_Signature {
-	Array_u8 data;
-	Array_u8 signature;
-};
 
 // NOTE: al serializar no estamos teniendo en cuenta el endianess que se esta utilizando.
 // Es posible que no funcione con distintos endianess.
-Array_u8
-sign_and_encrypt(RSA_Keys keys_alice, RSA_Keys keys_bob, Array_u8 data) {
+_Array_u8
+sign_and_encrypt(RSA_Keys keys_alice, RSA_Keys keys_bob, _Array_u8 data) {
 	mpz_t signature, encrypted_data_mpz, tmp_d;
 	mpz_inits(tmp_d, signature, encrypted_data_mpz, null);
 
 	sign_crt(signature, data.data, data.count, keys_alice);
 
-	Array_u8 signature_exported = {0};
-	Array_u8 packed = {0};
-	Array_u8 encrypted_data = {0};
+	_Array_u8 signature_exported = {0};
+	_Array_u8 packed = {0};
+	_Array_u8 encrypted_data = {0};
 
 	signature_exported.data = mpz_export(null, &signature_exported.count, 1, sizeof(u8), 0, 0, signature);
 
@@ -286,19 +294,21 @@ decrypt(RSA_Keys keys_alice, RSA_Keys keys_bob, u8* encrypted_data, u64 encrypte
 	mpz_import(encrypted_mpz, *(u64*)(encrypted_data+8), 1, sizeof(u8), 0, 0, encrypted_data + 16 + *(u64*)encrypted_data);
 	decrypt_crt(decrypted_mpz, encrypted_mpz, keys_bob);
 
-	Array_u8 decrypted = {0};
+	_Array_u8 decrypted = {0};
 	decrypted.data = mpz_export(null, &decrypted.count, 1, sizeof(u8), 0, 0, decrypted_mpz);
 
 	mpz_import(designed_mpz, *(u64*)encrypted_data, 1, sizeof(u8), 0, 0, encrypted_data+16);
 	design_data(designed_mpz, designed_mpz, keys_alice);
-	Array_u8 designed = {0};
+	_Array_u8 designed = {0};
 	designed.data = mpz_export(null, &designed.count, 1, sizeof(u8), 0, 0, designed_mpz);
 	return (Data_And_Signature){.data = decrypted, .signature = designed};
 }
 
+#endif
+#endif
 
 // :tests
-#ifndef RSA_H_IMPLEMENTATION
+#ifdef RSA_TESTS
 
 static char* buffer_logs[256];
 static u64 buffer_logs_count = 0;
@@ -328,8 +338,8 @@ encrypt_decrypt_rsa_test(char *arg) {
 	u8* packed_and_encrypted_data;
 	u64 packed_and_encrypted_count;
 
-	Array_u8 try_string_u8 = {.data = arg, .count = strlen(arg)};
-	Array_u8 encrypted = sign_and_encrypt(keys_alice, keys_bob, try_string_u8);
+	_Array_u8 try_string_u8 = {.data = arg, .count = strlen(arg)};
+	_Array_u8 encrypted = sign_and_encrypt(keys_alice, keys_bob, try_string_u8);
 
 	// sending ...
 
@@ -361,9 +371,9 @@ connect_chacha_with_rsa_test(char* arg) {
 	memcpy(chacha_key_and_nonce, chacha_key, sizeof(u32) * 8);
 	memcpy(chacha_key_and_nonce + 8, first_nonce, sizeof(u32) * 3);
 
-	Array_u8 chacha_key_and_nonce_array = {.data = (u8*)chacha_key_and_nonce, .count = sizeof(u32) * 11};
+	_Array_u8 chacha_key_and_nonce_array = {.data = (u8*)chacha_key_and_nonce, .count = sizeof(u32) * 11};
 
-	Array_u8 encrypted_key = sign_and_encrypt(keys_rsa_alice, keys_rsa_bob, chacha_key_and_nonce_array);
+	_Array_u8 encrypted_key = sign_and_encrypt(keys_rsa_alice, keys_rsa_bob, chacha_key_and_nonce_array);
 
 	// sending ...
 
@@ -465,46 +475,9 @@ pool_join(void) {
 	for (int i = 0; i < MAX_THREADS; i++) pthread_join(thread_pool.data[i].thread_id, null);
 }
 
-
-// AI_GENERATED benchmark
-bool
-benchmark_crt_vs_naive(char* arg) {
-	clock_t t0, t1;
-	t0 = clock();
-	RSA_Keys keys = rsa_generate_keys();
-	t1 = clock();
-	printf("keygen: %.1f ms\n", (double)(t1 - t0) / CLOCKS_PER_SEC * 1000.0);
-
-	mpz_t encrypted, result;
-	mpz_inits(encrypted, result, null);
-
-	// cifrar algo para tener input
-	u64 len = strlen(arg);
-	encrypt_data(encrypted, (u8*)arg, len, keys);
-
-	int n = 20;
-
-	t0 = clock();
-	for (int i = 0; i < n; i++) decrypt_mpz(result, encrypted, keys);
-	t1 = clock();
-	double naive_ms = (double)(t1 - t0) / CLOCKS_PER_SEC * 1000.0;
-
-	t0 = clock();
-	for (int i = 0; i < n; i++) decrypt_crt(result, encrypted, keys);
-	t1 = clock();
-	double crt_ms = (double)(t1 - t0) / CLOCKS_PER_SEC * 1000.0;
-
-	printf("naive: %.1f ms  crt: %.1f ms  speedup: %.2fx\n",
-		naive_ms / n, crt_ms / n, naive_ms / crt_ms);
-
-	mpz_clears(encrypted, result, null);
-	return crt_ms < naive_ms;
-}
-
 int
 main(void) {
 	char* arg = "abracadabra";
-	// benchmark_crt_vs_naive(arg);
 	for(int i = 0; i < MAX_THREADS; i++) {
 		array_add(free_threads, i);
 		array_add(thread_pool, (Thread){0});

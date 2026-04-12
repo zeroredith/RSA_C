@@ -167,15 +167,9 @@ main(int argc, char** argv) {
 
 
 //:Generated
-typedef struct Array_u8 Array_u8;
 typedef struct Array_Thread Array_Thread;
 typedef struct Array_Task Array_Task;
 typedef struct Array_u64 Array_u64;
-struct Array_u8 {
-	u64 count;
-	u64 capacity;
-	u8 *data;
-};
 struct Array_Thread {
 	u64 count;
 	u64 capacity;
